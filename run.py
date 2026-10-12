@@ -86,7 +86,7 @@ def EMOE_run(
         args['cur_seed'] = i + 1
         result = _run(args, num_workers, is_tune)
         model_results.append(result)
-    if args.is_distill:
+    if args.get('is_distill', True):
         criterions = list(model_results[0].keys())
         # save result to csv
         csv_file = res_save_dir / f"{dataset_name}.csv"
