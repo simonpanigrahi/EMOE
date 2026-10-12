@@ -15,7 +15,6 @@ import sys
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:2"
 logger = logging.getLogger('EMOE')
-torch.cuda.set_device(0)
 
 def _set_logger(log_dir, model_name, dataset_name, verbose_level):
 
@@ -122,7 +121,7 @@ def _run(args, num_workers=4, is_tune=False, from_sena=False):
     from_idx = [0, 1, 2]
     assert len(from_idx) >= 1
 
-    model = getattr(emoe, 'EMOE')(args).cuda()
+    model = getattr(emoe, 'EMOE')(args).to(args['device'])
 
     trainer = ATIO().getTrain(args)
 
