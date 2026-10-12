@@ -83,6 +83,7 @@ def EMOE_run(
     model_results = []
     for i, seed in enumerate(seeds):
         setup_seed(seed)
+        logger.info(f"seed: {seed}")
         args['cur_seed'] = i + 1
         result = _run(args, num_workers, is_tune)
         model_results.append(result)

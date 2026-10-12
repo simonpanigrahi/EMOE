@@ -2,7 +2,7 @@ import logging
 import pickle
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, Subset
 __all__ = ['MMDataLoader']
 logger = logging.getLogger('EMOE')
 
@@ -146,6 +146,10 @@ def MMDataLoader(args, num_workers):
 
     if 'seq_lens' in args:
         args['seq_lens'] = datasets['train'].get_seq_len() 
+
+    if args.get('subset_sizes'):
+        # --smoke: keep only the first n clips of each split
+        datasets = {ds: Subset(datasets[ds], range(args['subset_sizes'][ds])) for ds in datasets}
 
     dataLoader = {
         ds: DataLoader(datasets[ds],
