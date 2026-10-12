@@ -15,8 +15,8 @@ class BertTextEncoder(nn.Module):
 
         tokenizer_class = TRANSFORMERS_MAP[transformers][1]
         model_class = TRANSFORMERS_MAP[transformers][0]
-        self.tokenizer = tokenizer_class.from_pretrained(pretrained, cache_dir=local_cache_path)
-        self.model = model_class.from_pretrained(pretrained, cache_dir=local_cache_path)
+        self.tokenizer = tokenizer_class.from_pretrained(pretrained)
+        self.model = model_class.from_pretrained(pretrained)
         self.use_finetune = use_finetune
     
     def get_tokenizer(self):
