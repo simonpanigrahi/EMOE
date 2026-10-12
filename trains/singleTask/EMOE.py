@@ -19,7 +19,7 @@ class EMOE():
     def do_train(self, model, dataloader, return_epoch_results=False):
         params = list(model.parameters())
         optimizer = optim.Adam(params, lr=self.args.learning_rate)
-        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, verbose=True, patience=self.args.patience)
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=self.args.patience)
 
         epochs, best_epoch = 0, 0
         if return_epoch_results:
