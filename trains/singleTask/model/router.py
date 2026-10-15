@@ -63,3 +63,38 @@ class EqualRouter(nn.Module):
 
     def forward(self, x):
         return torch.full((x.shape[0], 3), 1.0 / 3, device=x.device)
+
+
+class ErrorHead(nn.Module):
+    """Guesses how wrong one expert's sentiment prediction will be.
+
+    Input: the feature the expert uses for its own prediction.
+    Output: a guessed absolute error, always >= 0 (Softplus). About 16K parameters.
+    """
+
+    def __init__(self, dim, hidden=64):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(dim, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, 1),
+            nn.Softplus(),
+        )
+
+    def forward(self, feature):
+        return self.net(feature)  # (batch, 1)
+
+
+def weights_from_error_guesses(err_text, err_video, err_audio):
+    """Turn three guessed errors into three weights that sum to 1.
+
+    Same formula EMOE uses to build its router's training target:
+    weight = 1 / (error^2 + 0.1), then divide by the sum of the three.
+    A small guessed error gives a big weight.
+    """
+    trust = torch.cat([
+        1.0 / (err_text ** 2 + 0.1),
+        1.0 / (err_video ** 2 + 0.1),
+        1.0 / (err_audio ** 2 + 0.1),
+    ], dim=1)  # (batch, 3)
+    return trust / trust.sum(dim=1, keepdim=True)

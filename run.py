@@ -124,8 +124,13 @@ def _run(args, num_workers=4, is_tune=False, from_sena=False):
 
     model = getattr(emoe, 'EMOE')(args).to(args['device'])
     # How big is the model, and how much of it is the router?
+    # (with --router self there is no Router; its three error heads play that part)
+    if model.router_type == 'self':
+        router_modules = [model.err_head_l, model.err_head_v, model.err_head_a]
+    else:
+        router_modules = [model.Router]
     n_total = sum(p.numel() for p in model.parameters())
-    n_router = sum(p.numel() for p in model.Router.parameters())
+    n_router = sum(p.numel() for m in router_modules for p in m.parameters())
     logger.info(f"router: {model.router_type} | parameters: total {n_total:,}, router {n_router:,}")
 
     trainer = ATIO().getTrain(args)

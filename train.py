@@ -6,9 +6,9 @@ parser.add_argument('--seeds', type=int, nargs='+', default=[1111])
 parser.add_argument('--num-workers', type=int, default=4)
 parser.add_argument('--smoke', action='store_true',
                     help='pipeline check: first 160/32/32 clips, 1 epoch, separate log/result dirs')
-parser.add_argument('--router', choices=['orig', 'light', 'equal'], default='orig',
+parser.add_argument('--router', choices=['orig', 'light', 'equal', 'self'], default='orig',
                     help='how the three modality weights are chosen: orig = EMOE as published, '
-                         'light = small per-modality router, equal = 1/3 each')
+                         'light = small per-modality router, equal = 1/3 each, self = self-assessing experts')
 cli = parser.parse_args()
 
 # Each router writes to its own folders, so runs never mix: orig keeps ./log and ./result

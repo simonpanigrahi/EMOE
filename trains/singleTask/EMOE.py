@@ -79,7 +79,19 @@ class EMOE():
                         loss_ud = uni_distill(output['c_proj'], torch.cat([output['l_proj'] * w[:,0].view(-1, 1),output['v_proj'] * w[:,1].view(-1, 1),
                         output['a_proj'] * w[:,2].view(-1, 1)], dim=1).detach())
 
-                    loss = loss_task_m + (loss_task_l + loss_task_v + loss_task_a)/3 + 0.1*(loss_ety + 0.1*loss_sim) + 0.1*loss_ud
+                    if self.args.get('router', 'orig') == 'self':
+                        # Self-assessing experts: no separate router, so no balancing terms.
+                        # Instead, teach each error head to guess its expert's real absolute
+                        # error on this batch (detached: it is only a target).
+                        real_err = torch.cat([
+                            (output['logits_l'] - labels).abs(),
+                            (output['logits_v'] - labels).abs(),
+                            (output['logits_a'] - labels).abs(),
+                        ], dim=1).detach()
+                        loss_err = torch.mean(torch.abs(output['err_guess'] - real_err))
+                        loss = loss_task_m + (loss_task_l + loss_task_v + loss_task_a)/3 + 0.1*loss_ud + loss_err
+                    else:
+                        loss = loss_task_m + (loss_task_l + loss_task_v + loss_task_a)/3 + 0.1*(loss_ety + 0.1*loss_sim) + 0.1*loss_ud
 
                     loss.backward()
                     train_loss += loss.item()

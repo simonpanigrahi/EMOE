@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from ...subNets import BertTextEncoder
 from ...subNets.transformers_encoder.transformer import TransformerEncoder
-from ...singleTask.model.router import router, LightRouter, EqualRouter
+from ...singleTask.model.router import router, LightRouter, EqualRouter, ErrorHead, weights_from_error_guesses
 
 class EMOE(nn.Module):
     def __init__(self, args):
@@ -83,8 +83,14 @@ class EMOE(nn.Module):
             self.Router = LightRouter([self.orig_d_l, self.orig_d_v, self.orig_d_a], self.args.temperature)
         elif self.router_type == 'equal':
             self.Router = EqualRouter()
+        elif self.router_type == 'self':
+            # No separate router: each expert gets a small head that guesses its own error
+            self.Router = None
+            self.err_head_l = ErrorHead(self.d_l)
+            self.err_head_v = ErrorHead(self.d_v)
+            self.err_head_a = ErrorHead(self.d_a)
         else:
-            raise ValueError(f"Unknown router '{self.router_type}': use orig, light or equal")
+            raise ValueError(f"Unknown router '{self.router_type}': use orig, light, equal or self")
         self.transfer_a_ali = nn.Linear(self.len_a, self.len_l)
         self.transfer_v_ali = nn.Linear(self.len_v, self.len_l)
 
@@ -118,13 +124,14 @@ class EMOE(nn.Module):
         x_a = audio.transpose(1, 2)
         x_v = video.transpose(1, 2)
 
-        if not self.aligned:
-            audio_ = self.transfer_a_ali(audio.permute(0, 2, 1)).permute(0, 2, 1)
-            video_ = self.transfer_v_ali(video.permute(0, 2, 1)).permute(0, 2, 1)
-            m_i = torch.cat((text, video_, audio_), dim=2)
-        else:
-            m_i = torch.cat((text, video, audio), dim=2)
-        m_w = self.Router(m_i)
+        if self.router_type != 'self':
+            if not self.aligned:
+                audio_ = self.transfer_a_ali(audio.permute(0, 2, 1)).permute(0, 2, 1)
+                video_ = self.transfer_v_ali(video.permute(0, 2, 1)).permute(0, 2, 1)
+                m_i = torch.cat((text, video_, audio_), dim=2)
+            else:
+                m_i = torch.cat((text, video, audio), dim=2)
+            m_w = self.Router(m_i)
 
         proj_x_l = x_l if self.orig_d_l == self.d_l else self.proj_l(x_l)
         proj_x_a = x_a if self.orig_d_a == self.d_a else self.proj_a(x_a)
@@ -166,6 +173,15 @@ class EMOE(nn.Module):
                       training=self.training))
         a_proj += c_a_att
         logits_a = self.out_layer_a(a_proj)
+        err_guess = None
+        if self.router_type == 'self':
+            # Each error head reads the same feature its expert predicts from.
+            # .detach(): the guesses learn from the experts but never change them.
+            err_l = self.err_head_l(l_proj.detach())
+            err_v = self.err_head_v(v_proj.detach())
+            err_a = self.err_head_a(a_proj.detach())
+            m_w = weights_from_error_guesses(err_l, err_v, err_a)
+            err_guess = torch.cat([err_l, err_v, err_a], dim=1)  # (batch, 3)
 
         if self.fusion_method == "sum": 
             for i in range(m_w.shape[0]):
@@ -192,6 +208,7 @@ class EMOE(nn.Module):
             'logits_v': logits_v,
             'logits_a': logits_a,
             'channel_weight': m_w,
+            'err_guess': err_guess,
             'c_proj': c_proj,
             'l_proj': l_proj,
             'v_proj': v_proj,
