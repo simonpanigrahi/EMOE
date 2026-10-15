@@ -123,6 +123,10 @@ def _run(args, num_workers=4, is_tune=False, from_sena=False):
     assert len(from_idx) >= 1
 
     model = getattr(emoe, 'EMOE')(args).to(args['device'])
+    # How big is the model, and how much of it is the router?
+    n_total = sum(p.numel() for p in model.parameters())
+    n_router = sum(p.numel() for p in model.Router.parameters())
+    logger.info(f"router: {model.router_type} | parameters: total {n_total:,}, router {n_router:,}")
 
     trainer = ATIO().getTrain(args)
 

@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from ...subNets import BertTextEncoder
 from ...subNets.transformers_encoder.transformer import TransformerEncoder
-from ...singleTask.model.router import router
+from ...singleTask.model.router import router, LightRouter, EqualRouter
 
 class EMOE(nn.Module):
     def __init__(self, args):
@@ -73,7 +73,18 @@ class EMOE(nn.Module):
             self.proj2_c = nn.Linear(self.d_l*3, self.d_l*3)
             self.out_layer_c = nn.Linear(self.d_l*3, output_dim)
 
-        self.Router = router(self.orig_d_l * self.len_l + self.orig_d_a * self.len_l + self.orig_d_v * self.len_l, 3, self.args.temperature)
+        # Which router decides the three modality weights (--router in train.py).
+        # 'orig' is EMOE as published and builds exactly the same layers as before.
+        self.router_type = args.get('router', 'orig')
+        if self.router_type == 'orig':
+            self.Router = router(self.orig_d_l * self.len_l + self.orig_d_a * self.len_l + self.orig_d_v * self.len_l, 3, self.args.temperature)
+        elif self.router_type == 'light':
+            # the router input is glued as text, video, audio
+            self.Router = LightRouter([self.orig_d_l, self.orig_d_v, self.orig_d_a], self.args.temperature)
+        elif self.router_type == 'equal':
+            self.Router = EqualRouter()
+        else:
+            raise ValueError(f"Unknown router '{self.router_type}': use orig, light or equal")
         self.transfer_a_ali = nn.Linear(self.len_a, self.len_l)
         self.transfer_v_ali = nn.Linear(self.len_v, self.len_l)
 
