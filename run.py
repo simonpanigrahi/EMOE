@@ -85,6 +85,8 @@ def EMOE_run(
         setup_seed(seed)
         logger.info(f"seed: {seed}")
         args['cur_seed'] = i + 1
+        args['seed_value'] = seed            # used to name the per-clip weights file
+        args['res_dir'] = str(res_save_dir)  # where that file goes
         result = _run(args, num_workers, is_tune)
         model_results.append(result)
     if args.get('is_distill', True):
@@ -141,10 +143,26 @@ def _run(args, num_workers=4, is_tune=False, from_sena=False):
         sys.stdout.flush()
         input('[Press Any Key to start another run]')
     else:
+        # Measure what training costs: wall time, and peak GPU memory when there is a GPU
+        start = time.time()
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
         epoch_results = trainer.do_train(model, dataloader, return_epoch_results=from_sena)
+        minutes = (time.time() - start) / 60
+        peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else float('nan')
+        logger.info(f"cost: training {minutes:.1f} min | peak GPU memory {peak_gb:.2f} GB")
         model.load_state_dict(torch.load('pt/emoe.pth'))
 
         results = trainer.do_test(model, dataloader['test'], mode="TEST", f=1)
+        # Extra checks on the same best model. They never change the result above.
+        # 1) Save the weights each test clip received, and log a summary of them.
+        weights_csv = Path(args['res_dir']) / f"test_weights_seed{args['seed_value']}.csv"
+        trainer.do_test(model, dataloader['test'], mode="WEIGHTS-CHECK", weights_csv=weights_csv)
+        # 2) Robustness: test again with the voice or face damaged on purpose.
+        #    The seed is reset so every variant sees exactly the same noise.
+        for how in ['voice_zero', 'face_zero', 'noise']:
+            torch.manual_seed(0)
+            trainer.do_test(model, dataloader['test'], mode=f"ROBUST {how}", corrupt=how)
 
         del model
         torch.cuda.empty_cache()

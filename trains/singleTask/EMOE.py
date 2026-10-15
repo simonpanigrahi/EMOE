@@ -1,5 +1,6 @@
 import logging
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,6 +10,50 @@ from tqdm import tqdm
 from ..utils import MetricsTop, dict_to_str, eva_imp, uni_distill, entropy_balance
 
 logger = logging.getLogger('EMOE')
+
+
+def corrupt_inputs(audio, vision, how):
+    """Damage the voice or face features on purpose, to test robustness.
+
+    voice_zero: the voice features become all zeros (voice missing)
+    face_zero:  the face features become all zeros (face missing)
+    noise:      random noise as strong as the features themselves is added to both
+    """
+    if how == 'voice_zero':
+        audio = torch.zeros_like(audio)
+    elif how == 'face_zero':
+        vision = torch.zeros_like(vision)
+    elif how == 'noise':
+        audio = audio + audio.std() * torch.randn_like(audio)
+        vision = vision + vision.std() * torch.randn_like(vision)
+    else:
+        raise ValueError(f"Unknown corruption '{how}'")
+    return audio, vision
+
+
+def summarize_weights(df):
+    """One log line about the weights the router gave on the test clips.
+
+    Questions it answers: what is the average weight per modality, do the weights
+    change from clip to clip (std), how often is text the most trusted, how close
+    to equal weights are they (entropy; 1.10 means exactly 1/3 each), and do
+    bigger weights go to the modality whose own prediction is better on that clip
+    (rank correlation with its error; negative is what a good router shows).
+    """
+    w = df[['w_text', 'w_face', 'w_voice']].to_numpy()
+    entropy = -(w * np.log(np.clip(w, 1e-9, None))).sum(axis=1)
+    # text counts as most trusted only if its weight is strictly the largest (ties do not count)
+    text_top = ((w[:, 0] > w[:, 1] + 1e-6) & (w[:, 0] > w[:, 2] + 1e-6)).mean() * 100
+    parts = []
+    for m in ['text', 'face', 'voice']:
+        if df[f'w_{m}'].std() < 1e-9:
+            corr = 'n/a (weights never change)'
+        else:
+            corr = f"{df[f'w_{m}'].rank().corr(df[f'err_{m}'].rank()):+.2f}"
+        parts.append(f"{m}: mean {df[f'w_{m}'].mean():.3f} std {df[f'w_{m}'].std():.3f} corr_with_error {corr}")
+    return (" | ".join(parts) + f" | text most trusted on {text_top:.0f}% of clips"
+            f" | mean entropy {entropy.mean():.3f} of max 1.099")
+
 
 class EMOE():
     def __init__(self, args):
@@ -130,11 +175,15 @@ class EMOE():
             if epochs - best_epoch >= self.args.early_stop:
                 return epoch_results if return_epoch_results else None
 
-    def do_test(self, model, dataloader, mode="VAL", return_sample_results=False, f=0):
+    def do_test(self, model, dataloader, mode="VAL", return_sample_results=False, f=0, corrupt=None, weights_csv=None):
+        """corrupt: None, 'voice_zero', 'face_zero' or 'noise' (see corrupt_inputs).
+        weights_csv: if a path is given, save one row per clip with its label, the
+        predictions and the router weights, and log a summary line."""
         model.eval()
         y_pred, y_true = [], []
         weight, ability = [], []
         c_fea = []
+        clip_rows = []
 
         eval_loss = 0.0
         if return_sample_results:
@@ -155,18 +204,45 @@ class EMOE():
                     text = batch_data['text'].to(self.args.device)
                     labels = batch_data['labels']['M'].to(self.args.device)
                     labels = labels.view(-1, 1)
+                    if corrupt is not None:
+                        audio, vision = corrupt_inputs(audio, vision, corrupt)
                     output = model(text, audio, vision)
 
                     loss = self.criterion(output['logits_c'], labels)
                     eval_loss += loss.item()
                     y_pred.append(output['logits_c'].cpu())
                     y_true.append(labels.cpu())
+                    if weights_csv is not None:
+                        w = output['channel_weight'].cpu()
+                        for i in range(labels.shape[0]):
+                            label = labels[i, 0].item()
+                            row = {
+                                'id': batch_data['id'][i],
+                                'label': label,
+                                'pred': output['logits_c'][i, 0].item(),
+                                'w_text': w[i, 0].item(),
+                                'w_face': w[i, 1].item(),
+                                'w_voice': w[i, 2].item(),
+                                # each expert's own error on this clip
+                                'err_text': abs(output['logits_l'][i, 0].item() - label),
+                                'err_face': abs(output['logits_v'][i, 0].item() - label),
+                                'err_voice': abs(output['logits_a'][i, 0].item() - label),
+                            }
+                            if output.get('err_guess') is not None:
+                                guess = output['err_guess'][i].cpu()
+                                row.update({'guess_text': guess[0].item(), 'guess_face': guess[1].item(), 'guess_voice': guess[2].item()})
+                            clip_rows.append(row)
                     
         eval_loss = eval_loss / len(dataloader)
         pred, true = torch.cat(y_pred), torch.cat(y_true)
         eval_results = self.metrics(pred, true)
         eval_results["Loss"] = round(eval_loss, 4)
         logger.info(f"{mode}-({self.args.model_name}) >> {dict_to_str(eval_results)}")
+        if weights_csv is not None:
+            df = pd.DataFrame(clip_rows)
+            df.to_csv(weights_csv, index=False)
+            logger.info(f"WEIGHTS-({self.args.model_name}) >> {summarize_weights(df)}")
+            logger.info(f"Per-clip weights saved to {weights_csv}")
         
         if return_sample_results:
             eval_results["Ids"] = ids
