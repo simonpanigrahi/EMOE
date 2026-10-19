@@ -60,6 +60,8 @@ class EMOE():
         self.args = args
         self.criterion = nn.L1Loss()
         self.metrics = MetricsTop(args.train_mode).getMetics(args.dataset_name)
+        # --target history: running average of each training clip's squared error per expert
+        self.err_history = {}
 
     def do_train(self, model, dataloader, return_epoch_results=False):
         params = list(model.parameters())
@@ -108,12 +110,24 @@ class EMOE():
                     l_dist = eva_imp(output['logits_l'], labels)
                     a_dist = eva_imp(output['logits_a'], labels)
                     v_dist = eva_imp(output['logits_v'], labels)
-                    dist = torch.zeros(l_dist.shape[0], 3).to(self.args.device)
-                    for i,_ in enumerate(l_dist):
-                        s = 1/(l_dist[i]+0.1) + 1/(v_dist[i]+0.1) + 1/(a_dist[i]+0.1)
-                        dist[i][0] = (1/(l_dist[i]+0.1)) / s
-                        dist[i][1] = (1/(v_dist[i]+0.1)) / s
-                        dist[i][2] = (1/(a_dist[i]+0.1)) / s
+                    if self.args.get('target', 'batch') == 'history':
+                        # QMF-style target: judge each expert by its running-average error on
+                        # this clip over training so far, not by one batch's error.
+                        sq_err = torch.cat([l_dist, v_dist, a_dist], dim=1).detach().cpu()  # (batch, 3)
+                        clip_ids = batch_data['index'].tolist()
+                        for j, k in enumerate(clip_ids):
+                            old = self.err_history.get(k)
+                            self.err_history[k] = sq_err[j] if old is None else 0.9 * old + 0.1 * sq_err[j]
+                        avg_err = torch.stack([self.err_history[k] for k in clip_ids]).to(self.args.device)
+                        trust = 1 / (avg_err + 0.1)  # same formula as EMOE's target
+                        dist = trust / trust.sum(dim=1, keepdim=True)
+                    else:
+                        dist = torch.zeros(l_dist.shape[0], 3).to(self.args.device)
+                        for i,_ in enumerate(l_dist):
+                            s = 1/(l_dist[i]+0.1) + 1/(v_dist[i]+0.1) + 1/(a_dist[i]+0.1)
+                            dist[i][0] = (1/(l_dist[i]+0.1)) / s
+                            dist[i][1] = (1/(v_dist[i]+0.1)) / s
+                            dist[i][2] = (1/(a_dist[i]+0.1)) / s
                     loss_sim = torch.mean(torch.mean((dist.detach() - w) ** 2, dim=-1))
                     if self.args.get('balance', 'clip') == 'batch':
                         loss_ety = batch_balance(w)    # balance the batch average only
