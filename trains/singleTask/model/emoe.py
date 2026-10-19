@@ -91,6 +91,8 @@ class EMOE(nn.Module):
             self.err_head_a = ErrorHead(self.d_a)
         else:
             raise ValueError(f"Unknown router '{self.router_type}': use orig, light, equal or self")
+        # Test-only check (run.py): when set to 3 numbers, every clip gets these fusion weights
+        self.forced_weights = None
         self.transfer_a_ali = nn.Linear(self.len_a, self.len_l)
         self.transfer_v_ali = nn.Linear(self.len_v, self.len_l)
 
@@ -182,6 +184,9 @@ class EMOE(nn.Module):
             err_a = self.err_head_a(a_proj.detach())
             m_w = weights_from_error_guesses(err_l, err_v, err_a)
             err_guess = torch.cat([err_l, err_v, err_a], dim=1)  # (batch, 3)
+        if self.forced_weights is not None:
+            # Test-only check: ignore the router and give every clip the same weights
+            m_w = self.forced_weights.to(m_w.device).view(1, 3).expand(m_w.shape[0], 3)
 
         if self.fusion_method == "sum": 
             for i in range(m_w.shape[0]):

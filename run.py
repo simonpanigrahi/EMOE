@@ -158,11 +158,22 @@ def _run(args, num_workers=4, is_tune=False, from_sena=False):
         # 1) Save the weights each test clip received, and log a summary of them.
         weights_csv = Path(args['res_dir']) / f"test_weights_seed{args['seed_value']}.csv"
         trainer.do_test(model, dataloader['test'], mode="WEIGHTS-CHECK", weights_csv=weights_csv)
-        # 2) Robustness: test again with the voice or face damaged on purpose.
-        #    The seed is reset so every variant sees exactly the same noise.
-        for how in ['voice_zero', 'face_zero', 'noise']:
+        # 2) Robustness: test again with the voice or face damaged on purpose
+        #    (both_zero leaves only the text). The seed is reset so every variant
+        #    sees exactly the same noise.
+        for how in ['voice_zero', 'face_zero', 'both_zero', 'noise']:
             torch.manual_seed(0)
             trainer.do_test(model, dataloader['test'], mode=f"ROBUST {how}", corrupt=how)
+        # 3) Do the per-clip weights matter? Test again with every clip given the same
+        #    fixed weights: 1/3 each, then this model's own average weights on the
+        #    validation clips. If the result barely moves, the per-clip choice adds nothing.
+        avg_w = trainer.average_weights(model, dataloader['valid'])
+        logger.info(f"FORCED average uses the validation-clip average: "
+                    f"text {avg_w[0]:.3f} face {avg_w[1]:.3f} voice {avg_w[2]:.3f}")
+        for name, fixed in [('equal', torch.full((3,), 1 / 3)), ('average', avg_w)]:
+            model.forced_weights = fixed
+            trainer.do_test(model, dataloader['test'], mode=f"FORCED {name}")
+        model.forced_weights = None
 
         del model
         torch.cuda.empty_cache()

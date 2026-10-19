@@ -17,12 +17,15 @@ def corrupt_inputs(audio, vision, how):
 
     voice_zero: the voice features become all zeros (voice missing)
     face_zero:  the face features become all zeros (face missing)
+    both_zero:  voice and face both become all zeros (only the text is left)
     noise:      random noise as strong as the features themselves is added to both
     """
     if how == 'voice_zero':
         audio = torch.zeros_like(audio)
     elif how == 'face_zero':
         vision = torch.zeros_like(vision)
+    elif how == 'both_zero':
+        audio, vision = torch.zeros_like(audio), torch.zeros_like(vision)
     elif how == 'noise':
         audio = audio + audio.std() * torch.randn_like(audio)
         vision = vision + vision.std() * torch.randn_like(vision)
@@ -229,6 +232,7 @@ class EMOE():
                     eval_loss += loss.item()
                     y_pred.append(output['logits_c'].cpu())
                     y_true.append(labels.cpu())
+                    weight.append(output['channel_weight'].cpu())
                     if weights_csv is not None:
                         w = output['channel_weight'].cpu()
                         for i in range(labels.shape[0]):
@@ -255,6 +259,10 @@ class EMOE():
         eval_results = self.metrics(pred, true)
         eval_results["Loss"] = round(eval_loss, 4)
         logger.info(f"{mode}-({self.args.model_name}) >> {dict_to_str(eval_results)}")
+        if corrupt is not None:
+            # Does the router notice the damage? Average weight per modality on these clips.
+            w_mean = torch.cat(weight).mean(dim=0)
+            logger.info(f"WEIGHTS {mode} >> text {w_mean[0]:.3f} face {w_mean[1]:.3f} voice {w_mean[2]:.3f}")
         if weights_csv is not None:
             df = pd.DataFrame(clip_rows)
             df.to_csv(weights_csv, index=False)
@@ -270,3 +278,17 @@ class EMOE():
             eval_results['Labels'] = all_labels
 
         return eval_results
+
+    def average_weights(self, model, dataloader):
+        """Average fusion weights (text, face, voice) the model gives over a set of clips."""
+        model.eval()
+        total, count = torch.zeros(3), 0
+        with torch.no_grad():
+            for batch_data in dataloader:
+                output = model(batch_data['text'].to(self.args.device),
+                               batch_data['audio'].to(self.args.device),
+                               batch_data['vision'].to(self.args.device))
+                w = output['channel_weight'].cpu()
+                total += w.sum(dim=0)
+                count += w.shape[0]
+        return total / count
