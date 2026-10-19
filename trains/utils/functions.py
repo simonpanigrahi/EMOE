@@ -65,3 +65,13 @@ def entropy_balance(probs):
     N = probs.size(1)
     entropy = N * torch.sum(probs * torch.log(probs), dim=1)
     return torch.mean(entropy)
+
+
+def batch_balance(probs):
+    """Balance over the whole batch instead of per clip, as in Shazeer et al. (2017)
+    and Switch Transformers: only the batch-average weights are pushed toward 1/3 each,
+    so a single clip can still put most of its weight on one modality.
+    Same scale as entropy_balance (N * sum p log p), so the 0.1 coefficient still fits."""
+    mean_probs = torch.clamp(probs.mean(dim=0), min=1e-9)  # (3,): average weight per modality
+    N = probs.size(1)
+    return N * torch.sum(mean_probs * torch.log(mean_probs))

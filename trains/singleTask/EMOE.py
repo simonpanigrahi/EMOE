@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch import optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
-from ..utils import MetricsTop, dict_to_str, eva_imp, uni_distill, entropy_balance
+from ..utils import MetricsTop, dict_to_str, eva_imp, uni_distill, entropy_balance, batch_balance
 
 logger = logging.getLogger('EMOE')
 
@@ -115,7 +115,10 @@ class EMOE():
                         dist[i][1] = (1/(v_dist[i]+0.1)) / s
                         dist[i][2] = (1/(a_dist[i]+0.1)) / s
                     loss_sim = torch.mean(torch.mean((dist.detach() - w) ** 2, dim=-1))
-                    loss_ety = entropy_balance(w)
+                    if self.args.get('balance', 'clip') == 'batch':
+                        loss_ety = batch_balance(w)    # balance the batch average only
+                    else:
+                        loss_ety = entropy_balance(w)  # EMOE: push every clip toward 1/3 each
 
                     if self.args.fusion_method == "sum":
                         loss_ud = uni_distill(output['c_proj'], (output['l_proj'] * w[:,0].view(-1, 1) + output['v_proj'] * w[:,1].view(-1, 1) + 
